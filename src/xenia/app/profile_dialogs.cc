@@ -6,11 +6,8 @@
  * Released under the BSD license - see LICENSE in the root for more details. *
  ******************************************************************************
  */
-
-#include <algorithm>
-
-#include "xenia/app/emulator_window.h"
 #include "xenia/app/profile_dialogs.h"
+#include "xenia/app/emulator_window.h"
 #include "xenia/base/png_utils.h"
 #include "xenia/base/system.h"
 #include "xenia/kernel/util/shim_utils.h"
@@ -171,6 +168,16 @@ void ProfileConfigDialog::OnDraw(ImGuiIO& io) {
     return;
   }
 
+  // For whatever reason dialog wasn't opened. It's probably in closing state.
+  // We need to handle it here before it will make icons allocation.
+  if (!dialog_open) {
+    ImGui::CloseCurrentPopup();
+    Close();
+    ImGui::End();
+    emulator_window_->ToggleProfilesConfigDialog();
+    return;
+  }
+
   if (profiles->empty()) {
     ImGui::TextUnformatted("No profiles found!");
     ImGui::Spacing();
@@ -294,11 +301,6 @@ void ProfileConfigDialog::OnDraw(ImGuiIO& io) {
   }
 
   ImGui::End();
-
-  if (!dialog_open) {
-    emulator_window_->ToggleProfilesConfigDialog();
-    return;
-  }
 }
 
 }  // namespace app

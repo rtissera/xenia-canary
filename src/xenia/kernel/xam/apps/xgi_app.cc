@@ -182,6 +182,16 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
       uint32_t session_info_ptr = xe::load_and_swap<uint32_t>(buffer + 0x14);
       uint32_t nonce_ptr = xe::load_and_swap<uint32_t>(buffer + 0x18);
 
+      // 584107FB expects offline session creation using flags 0 to succeed
+      // while offline.
+      // 58410889 expects stats session creation failure while offline.
+      //
+      // Allow offline session creation, but do not allow Xbox Live featured
+      // session creation.
+      if (flags) {
+        return 0x80155209;  // X_ONLINE_E_SESSION_NOT_LOGGED_ON
+      }
+
       XELOGD(
           "XGISessionCreateImpl({:08X}, {:08X}, {}, {}, {:08X}, {:08X}, "
           "{:08X})",
@@ -240,8 +250,8 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
       // Called after opening xbox live arcade and clicking on xbox live v5759
       // to 5787 and called after clicking xbox live in the game library from
       // v6683 to v6717
-      XELOGD("XGIUnkB0036({:08X}, {:08X}), unimplemented", buffer_ptr,
-             buffer_length);
+      // Does not get sent a buffer
+      XELOGD("XInvalidateGamerTileCache, unimplemented");
       return X_E_FAIL;
     }
     case 0x000B003D: {
@@ -310,8 +320,8 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
           property);
     }
     case 0x000B0071: {
-      XELOGD("XGIUnkB0071({:08X}, {:08X}), unimplemented", buffer_ptr,
-             buffer_length);
+      XELOGD("ContentEnumerate::ResetEnumerator({:08X}, {:08X}), unimplemented",
+             buffer_ptr, buffer_length);
       return X_E_SUCCESS;
     }
   }

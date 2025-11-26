@@ -11,9 +11,6 @@
 
 #include <climits>
 #include <cmath>
-#include <memory>
-#include <sstream>
-#include <utility>
 
 #include "third_party/fmt/include/fmt/format.h"
 #include "third_party/glslang/SPIRV/GLSL.std.450.h"
@@ -1069,7 +1066,9 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
       coordinates[coordinate_component_index] = coordinates_operand;
     }
 
-    // TODO(Triang3l): Reverting the resolution scale.
+    // Resolution scale doesn't need reverting for texture weights - weights are
+    // calculated from fractional parts of coordinates which are
+    // scale-independent.
 
     if (instr.opcode == ucode::FetchOpcode::kGetTextureWeights) {
       // FIXME(Triang3l): Filtering modes should possibly be taken into account,

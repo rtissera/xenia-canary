@@ -9,25 +9,28 @@ project("xenia-ui")
   links({
     "xenia-base",
   })
-  defines({
-  })
   local_platform_files()
-  removefiles({"*_demo.cc"})
-  removefiles({"windowed_app_main_*.cc"})
-  filter("platforms:Android-*")
-    -- Exports JNI functions.
-    wholelib("On")
+  removefiles({
+    "*_demo.cc",
+    "windowed_app_main_*.cc",
+  })
+  if os.istarget("android") then
+    filter("platforms:Android-*")
+      -- Exports JNI functions.
+      wholelib("On")
+  end
 
-  filter("platforms:Windows")
+  filter("platforms:Windows-*")
     links({
       "dwmapi",
       "dxgi",
       "winmm",
     })
 
-  filter("platforms:Linux")
+  filter("platforms:Linux-*")
     links({
       "xcb",
       "X11",
-      "X11-xcb"
+      "X11-xcb",
+      "fontconfig"
     })

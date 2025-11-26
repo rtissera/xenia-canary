@@ -80,6 +80,14 @@
 #define XE_ARCH_PPC 1
 #endif
 
+#ifdef XE_ARCH_AMD64
+#define XE_HOST_ARCH_NAME "x64"
+#elif XE_ARCH_ARM64
+#define XE_HOST_ARCH_NAME "a64"
+#elif XE_ARCH_PPC
+#define XE_HOST_ARCH_NAME "ppc"
+#endif
+
 #if XE_PLATFORM_WIN32
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX  // Don't want windows.h including min/max macros.
@@ -150,13 +158,8 @@
 #define XE_UNLIKELY_IF(...) if (XE_UNLIKELY(__VA_ARGS__))
 #define XE_MAYBE_UNUSED __attribute__((unused))
 #else
-#if __cplusplus >= 202002
 #define XE_LIKELY_IF(...) if (!!(__VA_ARGS__)) [[likely]]
 #define XE_UNLIKELY_IF(...) if (!!(__VA_ARGS__)) [[unlikely]]
-#else
-#define XE_LIKELY_IF(...) if (!!(__VA_ARGS__))
-#define XE_UNLIKELY_IF(...) if (!!(__VA_ARGS__))
-#endif
 #define XE_MAYBE_UNUSED
 #endif
 // only use __restrict if MSVC, for clang/gcc we can use -fstrict-aliasing which

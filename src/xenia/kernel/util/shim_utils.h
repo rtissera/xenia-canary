@@ -631,11 +631,10 @@ using xe::cpu::ExportTag;
                    xe::kernel::shim::KernelModuleId::module_name,          \
                    ordinals::name>(&name##_entry))>>;                      \
   const auto EXPORT_##module_name##_##name = RegisterExport_##module_name( \
-      _register_##module_name##_##name ::RegisterExport<                   \
-          &name##_entry, tags | (static_cast<xe::cpu::ExportTag::type>(    \
-                                     xe::cpu::ExportCategory::category)    \
-                                 << xe::cpu::ExportTag::CategoryShift)>(   \
-          #name));
+      _register_##module_name##_##name ::RegisterExport < &name##_entry,   \
+      tags | (static_cast<xe::cpu::ExportTag::type>(                       \
+                  xe::cpu::ExportCategory::category)                       \
+              << xe::cpu::ExportTag::CategoryShift) > (#name));
 
 #define DECLARE_EMPTY_REGISTER_EXPORTS(module_name, group_name) \
   void xe::kernel::module_name::Register##group_name##Exports(  \
@@ -657,6 +656,9 @@ using xe::cpu::ExportTag;
   DECLARE_EXPORT(xbdm, name, category, tags)
 #define DECLARE_XBDM_EXPORT1(name, category, tag) \
   DECLARE_EXPORT(xbdm, name, category, xe::cpu::ExportTag::tag)
+#define DECLARE_XBDM_EXPORT2(name, category, tag1, tag2) \
+  DECLARE_EXPORT(xbdm, name, category,                   \
+                 xe::cpu::ExportTag::tag1 | xe::cpu::ExportTag::tag2)
 
 #define DECLARE_XBDM_EMPTY_REGISTER_EXPORTS(group_name) \
   DECLARE_EMPTY_REGISTER_EXPORTS(xbdm, group_name)

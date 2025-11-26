@@ -54,9 +54,6 @@ namespace xam {
 //
 // We deliberately delay the XN_SYS_UI = false notification to give games time
 // to create a listener (if they're insane enough do this).
-
-extern std::atomic<int> xam_dialogs_shown_;
-
 template <typename T>
 X_RESULT xeXamDispatchDialog(T* dialog,
                              std::function<X_RESULT(T*)> close_callback,
@@ -74,9 +71,9 @@ X_RESULT xeXamDispatchDialog(T* dialog,
         kernel_state()->emulator()->display_window()->app_context();
     if (app_context.CallInUIThreadSynchronous(
             [&dialog, &fence]() { dialog->Then(&fence); })) {
-      ++xam_dialogs_shown_;
+      kernel_state()->xam_state()->xam_dialogs_shown_++;
       fence.Wait();
-      --xam_dialogs_shown_;
+      kernel_state()->xam_state()->xam_dialogs_shown_--;
     } else {
       delete dialog;
     }
@@ -116,9 +113,9 @@ X_RESULT xeXamDispatchDialogEx(
     xe::threading::Fence fence;
     if (display_window->app_context().CallInUIThreadSynchronous(
             [&dialog, &fence]() { dialog->Then(&fence); })) {
-      ++xam_dialogs_shown_;
+      kernel_state()->xam_state()->xam_dialogs_shown_++;
       fence.Wait();
-      --xam_dialogs_shown_;
+      kernel_state()->xam_state()->xam_dialogs_shown_--;
     } else {
       delete dialog;
     }
@@ -191,15 +188,14 @@ template <typename T>
 X_RESULT xeXamDispatchDialogAsync(T* dialog,
                                   std::function<void(T*)> close_callback) {
   kernel_state()->BroadcastNotification(kXNotificationSystemUI, true);
-  ++xam_dialogs_shown_;
-
+  kernel_state()->xam_state()->xam_dialogs_shown_++;
   // Important to pass captured vars by value here since we return from this
   // without waiting for the dialog to close so the original local vars will be
   // destroyed.
   dialog->set_close_callback([dialog, close_callback]() {
     close_callback(dialog);
 
-    --xam_dialogs_shown_;
+    kernel_state()->xam_state()->xam_dialogs_shown_--;
 
     auto run = []() -> void {
       xe::threading::Sleep(std::chrono::milliseconds(100));
@@ -215,13 +211,13 @@ X_RESULT xeXamDispatchDialogAsync(T* dialog,
 
 X_RESULT xeXamDispatchHeadlessAsync(std::function<void()> run_callback) {
   kernel_state()->BroadcastNotification(kXNotificationSystemUI, true);
-  ++xam_dialogs_shown_;
+  kernel_state()->xam_state()->xam_dialogs_shown_++;
 
   auto display_window = kernel_state()->emulator()->display_window();
   display_window->app_context().CallInUIThread([run_callback]() {
     run_callback();
 
-    --xam_dialogs_shown_;
+    kernel_state()->xam_state()->xam_dialogs_shown_--;
 
     auto run = []() -> void {
       xe::threading::Sleep(std::chrono::milliseconds(100));
@@ -393,7 +389,9 @@ static dword_result_t XamShowMessageBoxUi(
   return result;
 }
 
-dword_result_t XamIsUIActive_entry() { return xeXamIsUIActive(); }
+dword_result_t XamIsUIActive_entry() {
+  return kernel_state()->xam_state()->xam_dialogs_shown_ > 0;
+}
 DECLARE_XAM_EXPORT2(XamIsUIActive, kUI, kImplemented, kHighFrequency);
 
 // https://www.se7ensins.com/forums/threads/working-xshowmessageboxui.844116/
@@ -520,13 +518,6 @@ dword_result_t XamShowDeviceSelectorUI_entry(
     return X_ERROR_INVALID_PARAMETER;
   }
 
-  if (user_index != XUserIndexAny &&
-      !kernel_state()->xam_state()->IsUserSignedIn(user_index)) {
-    kernel_state()->CompleteOverlappedImmediate(overlapped,
-                                                X_ERROR_NO_SUCH_USER);
-    return X_ERROR_IO_PENDING;
-  }
-
   std::vector<const DummyDeviceInfo*> devices = ListStorageDevices();
 
   if (cvars::headless || !cvars::storage_selection_dialog) {
@@ -591,7 +582,7 @@ void XamShowDirtyDiscErrorUI_entry(dword_t user_index) {
 }
 DECLARE_XAM_EXPORT1(XamShowDirtyDiscErrorUI, kUI, kImplemented);
 
-dword_result_t XamShowPartyUI_entry(unknown_t r3, unknown_t r4) {
+dword_result_t XamShowPartyUI_entry(dword_t user_index) {
   return X_ERROR_FUNCTION_FAILED;
 }
 DECLARE_XAM_EXPORT1(XamShowPartyUI, kNone, kStub);
@@ -606,8 +597,8 @@ DECLARE_XAM_EXPORT1(XamShowCommunitySessionsUI, kNone, kStub);
 dword_result_t XamSetDashContext_entry(dword_t value,
                                        const ppc_context_t& ctx) {
   ctx->kernel_state->dash_context_ = value;
-  kernel_state()->BroadcastNotification(
-      kXNotificationDvdDriveUnknownDashContext, 0);
+  kernel_state()->BroadcastNotification(kXNotificationSystemDashContextChanged,
+                                        0);
   return 0;
 }
 
@@ -893,6 +884,7 @@ bool xeDrawProfileContent(xe::ui::ImGuiDrawer* imgui_drawer,
                           ImGuiSelectableFlags_SpanAllColumns,
                           end_draw_position)) {
       *selected_xuid = xuid;
+      ImGui::OpenPopup("Profile Menu");
     }
 
     if (context_menu) {
@@ -938,7 +930,7 @@ X_RESULT xeXamShowSigninUI(uint32_t user_index, uint32_t users_needed,
       close);
 }
 
-X_RESULT xeXamShowCreateProfileUIEx(uint32_t user_index, dword_t unkn,
+X_RESULT xeXamShowCreateProfileUIEx(uint32_t user_index, dword_t flag,
                                     char* unkn2_ptr) {
   Emulator* emulator = kernel_state()->emulator();
   xe::ui::ImGuiDrawer* imgui_drawer = emulator->imgui_drawer();
@@ -958,20 +950,42 @@ dword_result_t XamShowSigninUI_entry(dword_t users_needed, dword_t flags) {
 }
 DECLARE_XAM_EXPORT1(XamShowSigninUI, kUserProfiles, kImplemented);
 
+dword_result_t XamShowSigninUIEx_entry(
+    dword_t users_needed, dword_t flags,
+    pointer_t<XAM_OVERLAPPED> overlapped_ptr) {
+  X_RESULT result = xeXamShowSigninUI(XUserIndexAny, users_needed, flags);
+  if (overlapped_ptr) {
+    kernel_state()->CompleteOverlappedImmediate(overlapped_ptr, result);
+    return X_ERROR_IO_PENDING;
+  } else {
+    return result;
+  }
+}
+DECLARE_XAM_EXPORT1(XamShowSigninUIEx, kUserProfiles, kSketchy);
+
+dword_result_t XamShowNuiSigninUI_entry(dword_t unk, dword_t user_index,
+                                        dword_t flags) {
+  uint32_t users_needed = 1;
+  uint32_t sent_flags = flags | static_cast<uint32_t>(SigninUiFlags::NUI);
+  // xeXamNuiHudCheck(unk) = success then continue else return
+  return xeXamShowSigninUI(user_index, users_needed, sent_flags);
+}
+DECLARE_XAM_EXPORT1(XamShowNuiSigninUI, kUserProfiles, kSketchy);
+
 dword_result_t XamShowSigninUIp_entry(dword_t user_index, dword_t users_needed,
                                       dword_t flags) {
   return xeXamShowSigninUI(user_index, users_needed, flags);
 }
 DECLARE_XAM_EXPORT1(XamShowSigninUIp, kUserProfiles, kImplemented);
 
-dword_result_t XamShowCreateProfileUIEx_entry(dword_t user_index, dword_t unkn,
+dword_result_t XamShowCreateProfileUIEx_entry(dword_t user_index, dword_t flag,
                                               lpstring_t unkn2_ptr) {
-  return xeXamShowCreateProfileUIEx(user_index, unkn, unkn2_ptr);
+  return xeXamShowCreateProfileUIEx(user_index, flag, unkn2_ptr);
 }
 DECLARE_XAM_EXPORT1(XamShowCreateProfileUIEx, kUserProfiles, kImplemented);
 
-dword_result_t XamShowCreateProfileUI_entry(dword_t user_index, dword_t unkn) {
-  return xeXamShowCreateProfileUIEx(user_index, unkn, 0);
+dword_result_t XamShowCreateProfileUI_entry(dword_t user_index, dword_t flag) {
+  return xeXamShowCreateProfileUIEx(user_index, flag, 0);
 }
 DECLARE_XAM_EXPORT1(XamShowCreateProfileUI, kUserProfiles, kImplemented);
 

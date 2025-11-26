@@ -10,8 +10,6 @@
 #include "xenia/gpu/d3d12/d3d12_shared_memory.h"
 
 #include <cstring>
-#include <utility>
-#include <vector>
 
 #include "xenia/base/assert.h"
 #include "xenia/base/cvar.h"
@@ -420,6 +418,22 @@ bool D3D12SharedMemory::UploadRanges(
     uint32_t upload_range_length = upload_range.second;
     trace_writer_.WriteMemoryRead(upload_range_start << page_size_log2(),
                                   upload_range_length << page_size_log2());
+
+    if (upload_range_length > 0) {
+      const uint32_t upload_range_last_page =
+          upload_range_start + upload_range_length - 1;
+
+      memory::PageAccess page_access =
+          memory().GetPhysicalHeap()->QueryRangeAccess(
+              upload_range_last_page << page_size_log2(),
+              (upload_range_last_page
+               << page_size_log2()));  // Check only last page
+
+      if (page_access == xe::memory::PageAccess::kNoAccess) {
+        XELOGE("Invalid upload range for GPU: {:08X}", upload_range_start);
+        return false;
+      }
+    }
 
     while (upload_range_length != 0) {
       ID3D12Resource* upload_buffer;

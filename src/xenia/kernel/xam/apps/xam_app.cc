@@ -36,51 +36,70 @@ X_HRESULT XamApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
   auto buffer = memory_->TranslateVirtual(buffer_ptr);
   switch (message) {
     case 0x0002000E: {
-      struct message_data {
-        xe::be<uint32_t> user_index;
-        xe::be<uint32_t> unk_04;
-        xe::be<uint32_t> extra_ptr;
-        xe::be<uint32_t> buffer_ptr;
-        xe::be<uint32_t> buffer_size;
-        xe::be<uint32_t> unk_14;
-        xe::be<uint32_t> length_ptr;
-        xe::be<uint32_t> unk_1C;
-      }* data = reinterpret_cast<message_data*>(buffer);
+      X_ENUMERATE_PARAM* data_ptr =
+          reinterpret_cast<X_ENUMERATE_PARAM*>(buffer);
+
       XELOGD(
-          "XamAppEnumerateContentAggregate({}, {:08X}, {:08X}, {:08X}, {}, "
-          "{:08X}, {:08X}, {:08X})",
-          (uint32_t)data->user_index, (uint32_t)data->unk_04,
-          (uint32_t)data->extra_ptr, (uint32_t)data->buffer_ptr,
-          (uint32_t)data->buffer_size, (uint32_t)data->unk_14,
-          (uint32_t)data->length_ptr, (uint32_t)data->unk_1C);
-      if (!data->buffer_ptr || !data->extra_ptr) {
+          "XEnumerateCrossTitle({:04X}, {:04X}, {:04X}, {:04X}, {}, {}, "
+          "{:04X})",
+          data_ptr->user_index.get(), data_ptr->flags.get(),
+          data_ptr->private_enum_structure_ptr.get(),
+          data_ptr->buffer_ptr.get(), data_ptr->buffer_size.get(),
+          data_ptr->items_requested.get(), data_ptr->items_returned_ptr.get());
+
+      if (!data_ptr->buffer_ptr || !data_ptr->private_enum_structure_ptr) {
         return X_E_INVALIDARG;
       }
 
-      auto extra = memory_->TranslateVirtual<X_KENUMERATOR_CONTENT_AGGREGATE*>(
-          data->extra_ptr);
-      auto buffer = memory_->TranslateVirtual(data->buffer_ptr);
+      auto enum_struct =
+          memory_->TranslateVirtual<X_KENUMERATOR_CONTENT_AGGREGATE*>(
+              data_ptr->private_enum_structure_ptr);
+
       auto e = kernel_state_->object_table()->LookupObject<XEnumerator>(
-          extra->handle);
+          enum_struct->handle);
+
       if (!e) {
         return X_E_INVALIDARG;
       }
-      assert_true(extra->magic == kXObjSignature);
-      if (data->buffer_size) {
-        std::memset(buffer, 0, data->buffer_size);
-      }
-      uint32_t item_count = 0;
-      auto result = e->WriteItems(data->buffer_ptr, buffer, &item_count);
 
-      if (result == X_ERROR_SUCCESS && item_count >= 1) {
-        if (data->length_ptr) {
-          auto length_ptr =
-              memory_->TranslateVirtual<be<uint32_t>*>(data->length_ptr);
-          *length_ptr = 1;
-        }
-        return X_E_SUCCESS;
+      assert_true(enum_struct->magic == kXObjSignature);
+
+      XCONTENT_CROSS_TITLE_DATA cross_title_data = {};
+      uint8_t* cross_title_data_ptr =
+          reinterpret_cast<uint8_t*>(&cross_title_data);
+
+      uint32_t item_count = 0;
+      X_RESULT result = e->WriteItems(0, cross_title_data_ptr, &item_count);
+
+      XCONTENT_DATA_INTERNAL* content_data_ptr =
+          memory_->TranslateVirtual<XCONTENT_DATA_INTERNAL*>(
+              data_ptr->buffer_ptr);
+
+      assert_true(data_ptr->buffer_size == sizeof(XCONTENT_DATA_INTERNAL));
+
+      std::memset(content_data_ptr, 0, data_ptr->buffer_size);
+
+      if (!result) {
+        content_data_ptr->device_id = cross_title_data.content_data.device_id;
+        content_data_ptr->content_type =
+            cross_title_data.content_data.content_type;
+        content_data_ptr->set_display_name(
+            cross_title_data.content_data.display_name());
+        content_data_ptr->set_file_name(
+            cross_title_data.content_data.file_name());
+        content_data_ptr->padding[0] = content_data_ptr->padding[1] = 0;
+        content_data_ptr->title_id = cross_title_data.title_id;
       }
-      return X_E_NO_MORE_FILES;
+
+      result = X_HRESULT_FROM_WIN32(result);
+
+      xe::be<uint32_t>* items_returned_ptr =
+          memory_->TranslateVirtual<xe::be<uint32_t>*>(
+              data_ptr->items_returned_ptr);
+
+      *items_returned_ptr = item_count;
+
+      return result;
     }
     case 0x00020021: {
       struct XContentQueryVolumeDeviceType {
@@ -138,8 +157,15 @@ X_HRESULT XamApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
     case 0x0002B003: {
       // Games used in:
       // 4D5309C9
-      XELOGD("XamUnk2B003({:08X}, {:08X}), unimplemented", buffer_ptr,
-             buffer_length);
+      // It only receives buffer
+      struct {
+        xe::be<uint64_t> unk1;
+        xe::be<uint64_t> unk2;
+        xe::be<uint64_t> unk3;
+      }* args = memory_->TranslateVirtual<decltype(args)>(buffer_ptr);
+
+      XELOGD("XamUnk2B003({:016X}, {:016X}, {:016X}), unimplemented",
+             args->unk1.get(), args->unk2.get(), args->unk3.get());
       return X_E_SUCCESS;
     }
   }

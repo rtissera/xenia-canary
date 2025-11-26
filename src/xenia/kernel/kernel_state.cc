@@ -7,6 +7,8 @@
  ******************************************************************************
  */
 
+#include <ranges>
+
 #include "xenia/kernel/kernel_state.h"
 
 #include "xenia/base/byte_stream.h"
@@ -40,6 +42,8 @@ DECLARE_string(cl);
 
 namespace xe {
 namespace kernel {
+
+constexpr std::chrono::milliseconds kDeferredOverlappedDelayMillis(25);
 
 // This is a global object initialized with the XboxkrnlModule.
 // It references the current kernel state object that all kernel methods should
@@ -137,27 +141,6 @@ const std::unique_ptr<xam::SpaInfo> KernelState::module_xdbf(
   return nullptr;
 }
 
-bool KernelState::UpdateSpaData(vfs::Entry* spa_file_update) {
-  vfs::File* file;
-  if (spa_file_update->Open(vfs::FileAccess::kFileReadData, &file) !=
-      X_STATUS_SUCCESS) {
-    return false;
-  }
-
-  std::vector<uint8_t> data(spa_file_update->size());
-
-  size_t read_bytes = 0;
-  if (file->ReadSync(std::span<uint8_t>(data.data(), spa_file_update->size()),
-                     0, &read_bytes) != X_STATUS_SUCCESS) {
-    return false;
-  }
-
-  xam::SpaInfo new_spa_data(std::span<uint8_t>(data.data(), data.size()));
-  xam_state_->LoadSpaInfo(&new_spa_data);
-  emulator_->game_info_database()->Update(&new_spa_data);
-  return true;
-}
-
 uint32_t KernelState::AllocateTLS() { return uint32_t(tls_bitmap_.Acquire()); }
 
 void KernelState::FreeTLS(uint32_t slot) {
@@ -231,6 +214,28 @@ bool KernelState::IsKernelModule(const std::string_view name) {
       return true;
     }
   }
+  return false;
+}
+
+bool KernelState::IsModuleLoaded(const std::string_view name) {
+  if (name.empty()) {
+    return true;
+  }
+
+  for (auto kernel_module : kernel_modules_) {
+    if (kernel_module->Matches(name)) {
+      return true;
+    }
+  }
+
+  auto global_lock = global_critical_region_.Acquire();
+
+  for (auto user_module : user_modules_) {
+    if (user_module->Matches(name)) {
+      return true;
+    }
+  }
+
   return false;
 }
 
@@ -448,9 +453,14 @@ object_ref<UserModule> KernelState::LoadUserModule(
   auto name = xe::utf8::find_name_from_guest_path(raw_name);
   std::string path(raw_name);
   if (name == raw_name) {
-    assert_not_null(executable_module_);
-    path = xe::utf8::join_guest_paths(
-        xe::utf8::find_base_guest_path(executable_module_->path()), name);
+    if (!executable_module_) {
+      path = xe::utf8::join_guest_paths(
+          xe::utf8::find_base_guest_path((*user_modules_.cbegin())->path()),
+          name);
+    } else {
+      path = xe::utf8::join_guest_paths(
+          xe::utf8::find_base_guest_path(executable_module_->path()), name);
+    }
   }
 
   object_ref<UserModule> module;
@@ -538,6 +548,9 @@ X_RESULT KernelState::FinishLoadingUserModule(
         1,  // DLL_PROCESS_ATTACH
         0,  // 0 because always dynamic
     };
+
+    module->is_attached_ = true;
+
     auto thread_state = XThread::GetCurrentThread()->thread_state();
     processor()->Execute(thread_state, module->entry_point(), args,
                          xe::countof(args));
@@ -825,9 +838,16 @@ void KernelState::OnThreadExecute(XThread* thread) {
     if (user_module->is_dll_module() && user_module->entry_point()) {
       uint64_t args[] = {
           user_module->handle(),
-          2,  // DLL_THREAD_ATTACH
-          0,  // 0 because always dynamic
+          user_module->is_attached()
+              ? static_cast<uint64_t>(2)   // DLL_THREAD_ATTACH - Used to call
+                                           // DLL for each thread created.
+              : static_cast<uint64_t>(1),  // DLL_PROCESS_ATTACH - Used only
+                                           // once for initialization.
+          0,                               // 0 because always dynamic
       };
+
+      user_module->is_attached_ = true;
+
       processor()->Execute(thread_state, user_module->entry_point(), args,
                            xe::countof(args));
     }
@@ -868,6 +888,19 @@ object_ref<XThread> KernelState::GetThreadByID(uint32_t thread_id) {
   return retain_object(thread);
 }
 
+std::vector<uint32_t> KernelState::GetAllThreadIDs() {
+  auto global_lock = global_critical_region_.Acquire();
+
+  auto thread_ids_view =
+      threads_by_id_ |
+      std::views::transform([](const auto& pair) { return pair.first; });
+
+  std::vector<std::uint32_t> thread_ids(thread_ids_view.begin(),
+                                        thread_ids_view.end());
+
+  return thread_ids;
+}
+
 void KernelState::RegisterNotifyListener(XNotifyListener* listener) {
   auto global_lock = global_critical_region_.Acquire();
   notify_listeners_.push_back(retain_object(listener));
@@ -883,9 +916,12 @@ void KernelState::RegisterNotifyListener(XNotifyListener* listener) {
     // XN_SYS_SIGNINCHANGED x2
     listener->EnqueueNotification(kXNotificationSystemSignInChanged, 1);
     listener->EnqueueNotification(kXNotificationSystemSignInChanged, 1);
-
-    listener->EnqueueNotification(kXNotificationDvdDriveTrayStateChanged,
-                                  X_DVD_DISC_STATE::XBOX_360_GAME_DISC);
+  }
+  if (!has_notified_live_startup_ && listener->mask() & kXNotifyLive) {
+    has_notified_live_startup_ = true;
+    listener->EnqueueNotification(kXNotificationLiveConnectionChanged,
+                                  0x80151802L);
+    listener->EnqueueNotification(kXNotificationLiveLinkStateChanged, 0);
   }
 }
 
@@ -1014,6 +1050,8 @@ void KernelState::CompleteOverlappedDeferredEx(
     if (pre_callback) {
       pre_callback();
     }
+    // 5454082B infinitely loads free roam in netplay without sleep.
+    xe::threading::Sleep(kDeferredOverlappedDelayMillis);
     uint32_t extended_error, length;
     auto result = completion_callback(extended_error, length);
     CompleteOverlappedEx(overlapped_ptr, result, extended_error, length);
@@ -1265,7 +1303,7 @@ void KernelState::InitializeProcess(X_KPROCESS* process, uint32_t type,
   process->unk_19 = unk_19;
   process->unk_1A = unk_1A;
   util::XeInitializeListHead(&process->thread_list, thread_list_guest_ptr);
-  process->unk_0C = 60;
+  process->quantum = 60;
   // doubt any guest code uses this ptr, which i think probably has something to
   // do with the page table
   process->clrdataa_masked_ptr = 0;
@@ -1365,7 +1403,7 @@ void KernelState::InitializeKernelGuestGlobals() {
 
   auto idle_process = memory()->TranslateVirtual<X_KPROCESS*>(GetIdleProcess());
   InitializeProcess(idle_process, X_PROCTYPE_IDLE, 0, 0, 0);
-  idle_process->unk_0C = 0x7F;
+  idle_process->quantum = 0x7F;
   auto system_process =
       memory()->TranslateVirtual<X_KPROCESS*>(GetSystemProcess());
   InitializeProcess(system_process, X_PROCTYPE_SYSTEM, 2, 5, 9);
@@ -1485,5 +1523,49 @@ void KernelState::InitializeKernelGuestGlobals() {
            offsetof32(KernelGuestGlobals, IoDeviceObjectType)}};
   xboxkrnl::xeKeSetEvent(&block->UsbdBootEnumerationDoneEvent, 1, 0);
 }
+
+void KernelState::InitializeXbdmCpuCounters() {
+  constexpr uint32_t counters_base_address = 0x91F00000;
+
+  // These are not confirmed and there seems to be multiple types of counters,
+  // but no idea how they're switched. For now this seems to be good enough.
+  constexpr std::array<const char*, 0x11> xbdm_counters = {
+      "load-hit-stores (S)",
+      "instructions committed",
+      "i-cache miss cycles",
+      "core 0 L2 data misses",
+      "core 0 L2 data misses",
+      "core 0 L2 data misses",
+      "core 0 L2 data misses",
+      "core 0 L2 data misses",
+      "core 0 L2 data misses",
+      "core 0 L2 data misses",
+      "core 0 L2 data misses",
+      "core 0 L2 data misses",
+      "core 0 L2 data misses",
+      "core 0 L2 data misses",
+      "core 0 L2 data misses",
+      "core 0 L2 data misses",
+      "Bad counter number - must be 0-15."};
+
+  auto xbdm_range = memory_->LookupHeap(counters_base_address);
+  if (!xbdm_range->AllocFixed(
+          counters_base_address, 0x1000, 0,
+          kMemoryAllocationCommit | kMemoryAllocationReserve,
+          kMemoryProtectRead | kMemoryProtectWrite)) {
+    return;
+  }
+
+  uint32_t address = counters_base_address;
+
+  for (size_t i = 0; i < xbdm_counters.size(); i++) {
+    xbdm_counters_address[i] = address;
+    const std::string entry = xbdm_counters[i];
+    std::memcpy(memory_->TranslateVirtual<char*>(address), entry.c_str(),
+                entry.size());
+    address += static_cast<uint32_t>(entry.size()) + 1;
+  }
+}
+
 }  // namespace kernel
 }  // namespace xe

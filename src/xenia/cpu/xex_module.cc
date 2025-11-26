@@ -9,8 +9,6 @@
 
 #include "xenia/cpu/xex_module.h"
 
-#include <algorithm>
-
 #include "third_party/fmt/include/fmt/format.h"
 
 #include "xenia/base/byte_order.h"
@@ -26,6 +24,7 @@
 #include "xenia/cpu/processor.h"
 #include "xenia/emulator.h"
 #include "xenia/kernel/kernel_state.h"
+#include "xenia/kernel/user_module.h"
 #include "xenia/kernel/xmodule.h"
 
 #include "third_party/crypto/TinySHA1.hpp"
@@ -1064,6 +1063,15 @@ bool XexModule::LoadContinue() {
                   opt_import_libraries->string_table.count);
       assert_not_null(string_table[library_name_index]);
       auto library_name = std::string(string_table[library_name_index]);
+
+      if (!kernel_state_->IsModuleLoaded(library_name)) {
+        if (auto module = kernel_state_->LoadUserModule(library_name)) {
+          if (kernel_state_->FinishLoadingUserModule(module, false)) {
+            library_name = module->path();
+          }
+        }
+      }
+
       SetupLibraryImports(library_name, library);
       library_offset += library->size;
     }
@@ -1119,15 +1127,13 @@ void XexModule::Precompile() {
                                 high_code);
   final_image_sha_.finalize(image_sha_bytes_);
 
-  char fmtbuf[20];
+  image_sha_str_.clear();
+  for (unsigned i = 0; i < sizeof(image_sha_bytes_); ++i) {
+    image_sha_str_ += fmt::format("{:02X}", image_sha_bytes_[i]);
+  }
 
-  for (unsigned i = 0; i < 20; ++i) {
-#ifdef XE_PLATFORM_WIN32
-    sprintf_s(fmtbuf, "%X", image_sha_bytes_[i]);
-#else
-    snprintf(fmtbuf, sizeof(fmtbuf), "%X", image_sha_bytes_[i]);
-#endif
-    image_sha_str_ += &fmtbuf[0];
+  if (image_sha_str_.size() != sizeof(image_sha_bytes_) * 2) {
+    XELOGE("XEX hash is the wrong length!");
   }
 
   // Find __savegprlr_* and __restgprlr_* and the others.

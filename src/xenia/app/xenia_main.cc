@@ -13,7 +13,6 @@
 #include <memory>
 #include <string>
 #include <thread>
-#include <vector>
 
 #include "xenia/app/discord/discord_presence.h"
 #include "xenia/app/emulator_window.h"
@@ -91,6 +90,8 @@ DEFINE_bool(mount_scratch, false, "Enable scratch mount", "Storage");
 
 DEFINE_bool(mount_cache, true, "Enable cache mount", "Storage");
 UPDATE_from_bool(mount_cache, 2024, 8, 31, 20, false);
+
+DEFINE_bool(force_mount_devkit, false, "Force devkit mount", "Storage");
 
 DEFINE_transient_path(target, "",
                       "Specifies the target .xex or .iso to execute.",
@@ -371,13 +372,42 @@ std::unique_ptr<gpu::GraphicsSystem> EmulatorApp::CreateGraphicsSystem() {
   // For maintainability, as much implementation code as possible should be
   // placed in `xe::gpu` and shared between the backends rather than duplicated
   // between them.
+  const std::string gpu_implementation_name = cvars::gpu;
+  if (gpu_implementation_name == "null") {
+    return std::make_unique<gpu::null::NullGraphicsSystem>();
+  }
   Factory<gpu::GraphicsSystem> factory;
 #if XE_PLATFORM_WIN32
   factory.Add<gpu::d3d12::D3D12GraphicsSystem>("d3d12");
 #endif  // XE_PLATFORM_WIN32
   factory.Add<gpu::vulkan::VulkanGraphicsSystem>("vulkan");
-  factory.Add<gpu::null::NullGraphicsSystem>("null");
-  return factory.Create(cvars::gpu);
+  std::unique_ptr<gpu::GraphicsSystem> gpu_implementation =
+      factory.Create(gpu_implementation_name);
+  if (!gpu_implementation) {
+    xe::FatalError(
+        "Unable to initialize the graphics subsystem.\n"
+        "\n"
+#if XE_PLATFORM_ANDROID
+        "The GPU must support at least Vulkan 1.0 with the 'independentBlend' "
+        "feature.\n"
+        "\n"
+#else
+#if XE_PLATFORM_WIN32
+        "For Direct3D 12, at least Windows 10 is required, and the GPU must be "
+        "compatible with Direct3D 12 feature level 11_0.\n"
+        "\n"
+#endif  // XE_PLATFORM_WIN32
+        "For Vulkan, the Vulkan runtime must be installed, and the GPU must "
+        "support at least Vulkan 1.0. The Vulkan runtime can be downloaded at "
+        "https://vulkan.lunarg.com/sdk/home.\n"
+        "\n"
+        "Also, ensure that you have the latest driver installed for your GPU.\n"
+        "\n"
+#endif  // XE_PLATFORM_ANDROID
+        "See https://xenia.jp/faq/ for more information and the system "
+        "requirements.");
+  }
+  return gpu_implementation;
 }
 
 std::vector<std::unique_ptr<hid::InputDriver>> EmulatorApp::CreateInputDrivers(
@@ -414,9 +444,6 @@ std::vector<std::unique_ptr<hid::InputDriver>> EmulatorApp::CreateInputDrivers(
 }
 
 bool EmulatorApp::OnInitialize() {
-#if XE_ARCH_AMD64 == 1
-  amd64::InitFeatureFlags();
-#endif
   Profiler::Initialize();
   Profiler::ThreadEnter("Main");
 
@@ -441,6 +468,10 @@ bool EmulatorApp::OnInitialize() {
   XELOGI("Storage root: {}", storage_root);
 
   config::SetupConfig(storage_root);
+
+#if XE_ARCH_AMD64 == 1
+  amd64::InitFeatureFlags();
+#endif
 
   std::filesystem::path content_root = cvars::content_root;
   if (content_root.empty()) {
@@ -538,43 +569,44 @@ void EmulatorApp::EmulatorThread() {
   app_context().CallInUIThread(
       [this]() { emulator_window_->SetupGraphicsSystemPresenterPainting(); });
 
+  const auto fs = emulator_->file_system();
+
   if (cvars::mount_scratch) {
     auto scratch_device = std::make_unique<xe::vfs::HostPathDevice>(
-        "\\SCRATCH", "scratch", false);
+        "\\SCRATCH", emulator_->storage_root() / "scratch", false);
     if (!scratch_device->Initialize()) {
       XELOGE("Unable to scan scratch path");
     } else {
-      if (!emulator_->file_system()->RegisterDevice(
-              std::move(scratch_device))) {
+      if (!fs->RegisterDevice(std::move(scratch_device))) {
         XELOGE("Unable to register scratch path");
       } else {
-        emulator_->file_system()->RegisterSymbolicLink("scratch:", "\\SCRATCH");
+        fs->RegisterSymbolicLink("scratch:", "\\SCRATCH");
       }
     }
   }
 
   if (cvars::mount_cache) {
-    auto cache0_device =
-        std::make_unique<xe::vfs::HostPathDevice>("\\CACHE0", "cache0", false);
+    auto cache0_device = std::make_unique<xe::vfs::HostPathDevice>(
+        "\\CACHE0", emulator_->storage_root() / "cache0", false);
     if (!cache0_device->Initialize()) {
       XELOGE("Unable to scan cache0 path");
     } else {
-      if (!emulator_->file_system()->RegisterDevice(std::move(cache0_device))) {
+      if (!fs->RegisterDevice(std::move(cache0_device))) {
         XELOGE("Unable to register cache0 path");
       } else {
-        emulator_->file_system()->RegisterSymbolicLink("cache0:", "\\CACHE0");
+        fs->RegisterSymbolicLink("cache0:", "\\CACHE0");
       }
     }
 
-    auto cache1_device =
-        std::make_unique<xe::vfs::HostPathDevice>("\\CACHE1", "cache1", false);
+    auto cache1_device = std::make_unique<xe::vfs::HostPathDevice>(
+        "\\CACHE1", emulator_->storage_root() / "cache1", false);
     if (!cache1_device->Initialize()) {
       XELOGE("Unable to scan cache1 path");
     } else {
-      if (!emulator_->file_system()->RegisterDevice(std::move(cache1_device))) {
+      if (!fs->RegisterDevice(std::move(cache1_device))) {
         XELOGE("Unable to register cache1 path");
       } else {
-        emulator_->file_system()->RegisterSymbolicLink("cache1:", "\\CACHE1");
+        fs->RegisterSymbolicLink("cache1:", "\\CACHE1");
       }
     }
 
@@ -582,17 +614,33 @@ void EmulatorApp::EmulatorThread() {
     // NOTE: this must be registered _after_ the cache0/cache1 devices, due to
     // substring/start_with logic inside VirtualFileSystem::ResolvePath, else
     // accesses to those devices will go here instead
-    auto cache_device =
-        std::make_unique<xe::vfs::HostPathDevice>("\\CACHE", "cache", false);
+    auto cache_device = std::make_unique<xe::vfs::HostPathDevice>(
+        "\\CACHE", emulator_->storage_root() / "cache", false);
     if (!cache_device->Initialize()) {
       XELOGE("Unable to scan cache path");
     } else {
-      if (!emulator_->file_system()->RegisterDevice(std::move(cache_device))) {
+      if (!fs->RegisterDevice(std::move(cache_device))) {
         XELOGE("Unable to register cache path");
       } else {
-        emulator_->file_system()->RegisterSymbolicLink("cache:", "\\CACHE");
+        fs->RegisterSymbolicLink("cache:", "\\CACHE");
       }
     }
+  }
+
+  if (cvars::force_mount_devkit) {
+    auto devkit_device =
+        std::make_unique<xe::vfs::HostPathDevice>("\\DEVKIT", "devkit", false);
+
+    if (!devkit_device->Initialize()) {
+      XELOGE("Unable to scan devkit path");
+    }
+
+    if (!fs->RegisterDevice(std::move(devkit_device))) {
+      XELOGE("Unable to register devkit path");
+    }
+
+    fs->RegisterSymbolicLink("DEVKIT:", "\\DEVKIT");
+    fs->RegisterSymbolicLink("e:", "\\DEVKIT");
   }
 
   // Set a debug handler.

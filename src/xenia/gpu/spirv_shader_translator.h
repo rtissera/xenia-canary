@@ -20,7 +20,7 @@
 #include "xenia/gpu/shader_translator.h"
 #include "xenia/gpu/spirv_builder.h"
 #include "xenia/gpu/xenos.h"
-#include "xenia/ui/vulkan/vulkan_provider.h"
+#include "xenia/ui/vulkan/vulkan_device.h"
 
 namespace xe {
 namespace gpu {
@@ -320,8 +320,7 @@ class SpirvShaderTranslator : public ShaderTranslator {
   static constexpr uint32_t kSpirvMagicToolId = 26;
 
   struct Features {
-    explicit Features(
-        const ui::vulkan::VulkanProvider::DeviceInfo& device_info);
+    explicit Features(const ui::vulkan::VulkanDevice* vulkan_device);
     explicit Features(bool all = false);
 
     unsigned int spirv_version;
@@ -350,11 +349,15 @@ class SpirvShaderTranslator : public ShaderTranslator {
   SpirvShaderTranslator(const Features& features,
                         bool native_2x_msaa_with_attachments,
                         bool native_2x_msaa_no_attachments,
-                        bool edram_fragment_shader_interlock)
+                        bool edram_fragment_shader_interlock,
+                        uint32_t draw_resolution_scale_x = 1,
+                        uint32_t draw_resolution_scale_y = 1)
       : features_(features),
         native_2x_msaa_with_attachments_(native_2x_msaa_with_attachments),
         native_2x_msaa_no_attachments_(native_2x_msaa_no_attachments),
-        edram_fragment_shader_interlock_(edram_fragment_shader_interlock) {}
+        edram_fragment_shader_interlock_(edram_fragment_shader_interlock),
+        draw_resolution_scale_x_(draw_resolution_scale_x),
+        draw_resolution_scale_y_(draw_resolution_scale_y) {}
 
   uint64_t GetDefaultVertexShaderModification(
       uint32_t dynamic_addressable_register_count,
@@ -712,6 +715,8 @@ class SpirvShaderTranslator : public ShaderTranslator {
   Features features_;
   bool native_2x_msaa_with_attachments_;
   bool native_2x_msaa_no_attachments_;
+  uint32_t draw_resolution_scale_x_;
+  uint32_t draw_resolution_scale_y_;
 
   // For safety with different drivers (even though fragment shader interlock in
   // SPIR-V only has one control flow requirement - that both begin and end must

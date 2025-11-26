@@ -13,8 +13,6 @@
 #include <chrono>
 #include <cstdint>
 
-// https://github.com/HowardHinnant/date/commit/5ba1c1ad8514362dba596f228eb20eb13f63d948#r33275526
-#define HAS_UNCAUGHT_EXCEPTIONS 1
 #include "third_party/date/include/date/tz.h"
 
 #include "xenia/base/clock.h"
@@ -91,13 +89,15 @@ struct NtSystemClock {
     return sys_time{cdp.time_since_epoch()};
   }
 
+  // TODO(Gliniak): Disable until WINE will implement tzdb.
+  /*
   template <Domain domain_fresh_ = domain_>
   static constexpr std::enable_if_t<
       domain_fresh_ == Domain::Host,
       std::chrono::local_time<std::chrono::system_clock::duration>>
   to_local(const time_point& tp) {
     return std::chrono::current_zone()->to_local(to_sys(tp));
-  }
+  }*/
 
   template <Domain domain_fresh_ = domain_>
   static constexpr std::enable_if_t<domain_fresh_ == Domain::Host, time_point>
