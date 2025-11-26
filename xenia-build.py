@@ -14,9 +14,11 @@ from glob import glob
 from json import loads as jsonloads
 import os
 from shutil import rmtree
+import shutil
 import subprocess
 import sys
 import stat
+import platform
 
 __author__ = "ben.vanik@gmail.com (Ben Vanik)"
 
@@ -439,14 +441,116 @@ def git_submodule_update():
         ])
 
 
+def detect_default_compilers():
+    """Returns (cc_path, cxx_path, toolset) for the current platform."""
+    if hasattr(detect_default_compilers, "cache"):
+        return detect_default_compilers.cache
+
+    def resolve(candidate):
+        if not candidate:
+            return None
+        candidate = candidate.strip()
+        if not candidate:
+            return None
+        if os.path.isabs(candidate):
+            return candidate if os.access(candidate, os.X_OK) else None
+        return shutil.which(candidate)
+
+    env_cc = resolve(os.environ.get("CC"))
+    env_cxx = resolve(os.environ.get("CXX"))
+    if env_cc and env_cxx:
+        basename = os.path.basename(env_cc).lower()
+        if "gcc" in basename:
+            toolset = "gcc"
+        else:
+            toolset = "clang"
+        detect_default_compilers.cache = (env_cc, env_cxx, toolset)
+        return detect_default_compilers.cache
+
+    def pick_pair(pairs, toolset):
+        for cc_name, cxx_name in pairs:
+            cc_path = resolve(cc_name)
+            cxx_path = resolve(cxx_name)
+            if cc_path and cxx_path:
+                detect_default_compilers.cache = (cc_path, cxx_path, toolset)
+                return detect_default_compilers.cache
+        return None
+
+    clang_pairs = [
+        ("clang-21", "clang++-21"),
+        ("clang-20", "clang++-20"),
+        ("clang-19", "clang++-19"),
+        ("clang", "clang++"),
+    ]
+    gcc_pairs = [
+        ("gcc-13", "g++-13"),
+        ("gcc-12", "g++-12"),
+        ("gcc", "g++"),
+    ]
+
+    result = pick_pair(clang_pairs, "clang")
+    if result:
+        return result
+    result = pick_pair(gcc_pairs, "gcc")
+    if result:
+        return result
+
+    result = pick_pair([("cc", "c++")], "gcc")
+    if result:
+        return result
+
+    raise RuntimeError("No usable C/C++ compiler found on the system PATH.")
+
+
 def get_cc(cc=None):
+    if cc:
+        return cc
     if sys.platform == "linux":
-        if os.environ.get("CC"):
-            if "gcc" in os.environ.get("CC"):
-                return "gcc"
-        return "clang"
+        env_cc = os.environ.get("CC", "").lower()
+        if "gcc" in env_cc:
+            return "gcc"
+        if "clang" in env_cc:
+            return "clang"
+        _, _, toolset = detect_default_compilers()
+        return toolset
     if sys.platform == "win32":
         return "msc"
+
+
+def ensure_snappy_stubs_public():
+    header_path = os.path.join("third_party", "snappy", "snappy-stubs-public.h")
+    if os.path.isfile(header_path):
+        return
+    cc_compiler, cxx_compiler, _ = detect_default_compilers()
+    print("- generating snappy-stubs-public.h...")
+    subprocess.check_call([
+        "cmake",
+        "-DSNAPPY_BUILD_TESTS=OFF",
+        "-DSNAPPY_BUILD_BENCHMARKS=OFF",
+        "-DSNAPPY_REQUIRE_AVX=ON",
+        f"-DCMAKE_C_COMPILER={cc_compiler}",
+        f"-DCMAKE_CXX_COMPILER={cxx_compiler}",
+        "-Sthird_party/snappy",
+        "-Bthird_party/snappy",
+    ], env=dict(os.environ))
+
+
+def ensure_cmake_build_dir_consistency(config, cmake_build_type):
+    build_dir = os.path.join("build", f"build_{config}")
+    cache_path = os.path.join(build_dir, "CMakeCache.txt")
+    if not os.path.isfile(cache_path):
+        return
+    try:
+        with open(cache_path, "r", encoding="utf-8") as cache_file:
+            for line in cache_file:
+                if line.startswith("CMAKE_BUILD_TYPE:STRING="):
+                    cached = line.split("=", 1)[1].strip()
+                    if cached != cmake_build_type:
+                        print(f"- removing stale {build_dir} because CMAKE_BUILD_TYPE={cached}")
+                        rmtree(build_dir, ignore_errors=True)
+                    return
+    except OSError:
+        pass
 
 def get_clang_format_binary():
     """Finds a clang-format binary. Aborts if none is found.
@@ -681,6 +785,21 @@ class Command(object):
         return 1
 
 
+def get_linux_cmake_build_type(config):
+    """Map the config name to the Linux-specific CMake build type."""
+    machine = platform.machine().lower()
+    arch_map = {
+        "x86_64": "x86_64",
+        "amd64": "x86_64",
+        "aarch64": "ARM64",
+        "arm64": "ARM64",
+    }
+    arch = arch_map.get(machine)
+    if not arch:
+        raise RuntimeError(f"Unsupported Linux architecture '{machine}'")
+    return f"Linux-{arch}-{config.title()}"
+
+
 class SetupCommand(Command):
     """'setup' command.
     """
@@ -821,6 +940,8 @@ class BaseBuildCommand(Command):
             run_platform_premake(cc=args["cc"])
             print("")
 
+        ensure_snappy_stubs_public()
+
         print("- building (%s):%s..." % (
             "all" if not len(args["target"]) else ", ".join(args["target"]),
             args["config"]))
@@ -857,13 +978,18 @@ class BaseBuildCommand(Command):
                 args["config"]
             ] + scheme_args + pass_args, env=dict(os.environ))
         else:
+            cmake_build_type = args['config'].title()
+            if sys.platform == "linux":
+                cmake_build_type = get_linux_cmake_build_type(args['config'])
+            ensure_cmake_build_dir_consistency(args["config"], cmake_build_type)
+            cc_compiler, cxx_compiler, _ = detect_default_compilers()
             result = subprocess.call([
                 "cmake",
                 "-Sbuild",
                 f"-Bbuild/build_{args['config']}",
-                f"-DCMAKE_BUILD_TYPE={args['config'].title()}",
-                f"-DCMAKE_C_COMPILER={os.environ.get('CC', 'clang')}",
-                f"-DCMAKE_CXX_COMPILER={os.environ.get('CXX', 'clang++')}",
+                f"-DCMAKE_BUILD_TYPE={cmake_build_type}",
+                f"-DCMAKE_C_COMPILER={cc_compiler}",
+                f"-DCMAKE_CXX_COMPILER={cxx_compiler}",
                 "-GNinja"
             ] + pass_args, env=dict(os.environ))
             print("")

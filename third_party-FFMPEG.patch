@@ -1,0 +1,35 @@
+diff --git a/libavcodec/premake5.lua b/libavcodec/premake5.lua
+index aa73b81..86bf700 100644
+--- a/libavcodec/premake5.lua
++++ b/libavcodec/premake5.lua
+@@ -147,7 +147,7 @@ project("libavcodec")
+ 
+   -- libavcodec/x86/Makefile:
+   --   OBJS:
+-  filter({"platforms:Android-x86_64 or platforms:Linux or platforms:Windows"})
++  filter({"platforms:Android-x86_64 or platforms:Linux-* or platforms:Windows"})
+   files({
+     "x86/constants.c",
+     "x86/dct_init.c",
+@@ -158,7 +158,7 @@ project("libavcodec")
+   })
+   filter({})
+   --   MMX-OBJS:
+-  filter({"platforms:Android-x86_64 or platforms:Linux or platforms:Windows"})
++  filter({"platforms:Android-x86_64 or platforms:Linux-* or platforms:Windows"})
+   files({
+     "x86/fdct.c",
+   })
+diff --git a/libavutil/premake5.lua b/libavutil/premake5.lua
+index c7ced74..dcd0697 100644
+--- a/libavutil/premake5.lua
++++ b/libavutil/premake5.lua
+@@ -210,7 +210,7 @@ project("libavutil")
+ 
+   -- libavutil/x86/Makefile:
+   --   OBJS:
+-  filter({"platforms:Android-x86_64 or platforms:Linux or platforms:Windows"})
++  filter({"platforms:Android-x86_64 or platforms:Linux-* or platforms:Windows"})
+   files({
+     "x86/cpu.c",
+     "x86/fixed_dsp_init.c",
