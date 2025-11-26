@@ -17,15 +17,11 @@
 #include <pthread.h>
 #include <sched.h>
 #include <signal.h>
-#include <sys/eventfd.h>
 #include <sys/syscall.h>
-#include <sys/time.h>
-#include <sys/types.h>
 #include <unistd.h>
 #include <array>
 #include <cstddef>
 #include <ctime>
-#include <memory>
 
 #include "logging.h"
 
@@ -122,7 +118,7 @@ static void signal_handler(int signal, siginfo_t* info, void* context);
 
 void install_signal_handler(SignalType type) {
   if (signal_handler_installed[static_cast<size_t>(type)]) return;
-  struct sigaction action {};
+  struct sigaction action{};
   action.sa_flags = SA_SIGINFO;
   action.sa_sigaction = signal_handler;
   sigemptyset(&action.sa_mask);

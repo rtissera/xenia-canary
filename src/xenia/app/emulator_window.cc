@@ -9,13 +9,6 @@
 
 #include "xenia/app/emulator_window.h"
 
-#include <filesystem>
-#include <functional>
-#include <memory>
-#include <mutex>
-#include <string>
-#include <utility>
-
 #include "third_party/imgui/imgui.h"
 #include "third_party/stb/stb_image_write.h"
 #include "third_party/tomlplusplus/toml.hpp"
@@ -147,15 +140,6 @@ DEFINE_int32(recent_titles_entry_amount, 10,
              "Allows user to define how many titles is saved in list of "
              "recently played titles.",
              "General");
-
-namespace xe {
-namespace kernel {
-namespace xam {
-extern std::atomic<int> xam_dialogs_shown_;
-}
-}  // namespace kernel
-}  // namespace xe
-
 namespace xe {
 namespace app {
 
@@ -191,8 +175,7 @@ EmulatorWindow::EmulatorWindow(Emulator* emulator,
 #endif
                 " ("
 #ifdef XE_BUILD_IS_PR
-                "PR#" XE_BUILD_PR_NUMBER " " XE_BUILD_PR_REPO
-                " " XE_BUILD_PR_BRANCH "@" XE_BUILD_PR_COMMIT_SHORT " against "
+                "PR#" XE_BUILD_PR_NUMBER " - "
 #endif
                 XE_BUILD_BRANCH "@" XE_BUILD_COMMIT_SHORT " on " XE_BUILD_DATE
                 ")";
@@ -282,9 +265,11 @@ void EmulatorWindow::OnEmulatorInitialized() {
   }
 
   // Create a thread to listen for controller hotkeys.
-  Gamepad_HotKeys_Listener =
-      threading::Thread::Create({}, [&] { GamepadHotKeys(); });
-  Gamepad_HotKeys_Listener->set_name("Gamepad HotKeys Listener");
+  if (cvars::controller_hotkeys) {
+    Gamepad_HotKeys_Listener =
+        threading::Thread::Create({}, [&] { GamepadHotKeys(); });
+    Gamepad_HotKeys_Listener->set_name("Gamepad HotKeys Listener");
+  }
 }
 
 void EmulatorWindow::EmulatorWindowListener::OnClosing(ui::UIEvent& e) {
@@ -659,6 +644,65 @@ void EmulatorWindow::ContentInstallDialog::OnDraw(ImGuiIO& io) {
   ImGui::End();
 }
 
+void EmulatorWindow::XMPConfigDialog::OnDraw(ImGuiIO& io) {
+  ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_FirstUseEver);
+  ImGui::SetNextWindowSize(ImVec2(20, 20), ImGuiCond_FirstUseEver);
+
+  bool dialog_open = true;
+  if (!ImGui::Begin("Audio Player Menu", &dialog_open,
+                    ImGuiWindowFlags_NoCollapse |
+                        ImGuiWindowFlags_AlwaysAutoResize |
+                        ImGuiWindowFlags_HorizontalScrollbar)) {
+    Close();
+    ImGui::End();
+    return;
+  }
+
+  auto audio_player = emulator_window_.emulator_->audio_media_player();
+  using xmp_state = kernel::xam::apps::XmpApp::State;
+  if (audio_player) {
+    ImGui::Text("Audio player status:");
+    ImGui::SameLine();
+    switch (audio_player->GetState()) {
+      case xmp_state::kIdle:
+        ImGui::Text("Idle");
+        break;
+      case xmp_state::kPaused:
+        ImGui::Text("Paused");
+        break;
+      case xmp_state::kPlaying:
+        ImGui::Text("Playing");
+        break;
+      default:
+        break;
+    }
+
+    if (audio_player->IsPlaying()) {
+      if (ImGui::Button("Pause")) {
+        audio_player->Pause();
+      }
+    } else if (audio_player->IsPaused()) {
+      if (ImGui::Button("Resume")) {
+        audio_player->Continue();
+      }
+    }
+
+    volume_ =
+        emulator_window_.emulator_->audio_media_player()->GetVolume()->load();
+
+    if (ImGui::SliderFloat("Audio player volume", &volume_, 0.0f, 1.0f)) {
+      audio_player->SetVolume(volume_);
+    }
+  }
+
+  ImGui::End();
+
+  if (!dialog_open) {
+    emulator_window_.ToggleXMPConfigDialog();
+    return;
+  }
+}
+
 bool EmulatorWindow::Initialize() {
   window_->AddListener(&window_listener_);
   window_->AddInputListener(&window_listener_, kZOrderEmulatorWindowInput);
@@ -790,6 +834,15 @@ bool EmulatorWindow::Initialize() {
         std::bind(&EmulatorWindow::DisplayHotKeysConfig, this)));
   }
   main_menu->AddChild(std::move(hid_menu));
+
+  // XMP menu
+  auto xmp_menu = MenuItem::Create(MenuItem::Type::kPopup, "&XMP");
+  {
+    xmp_menu->AddChild(MenuItem::Create(
+        MenuItem::Type::kString, "&Show XMP Menu", "",
+        std::bind(&EmulatorWindow::ToggleXMPConfigDialog, this)));
+  }
+  main_menu->AddChild(std::move(xmp_menu));
 
   // Help menu.
   auto help_menu = MenuItem::Create(MenuItem::Type::kPopup, "&Help");
@@ -1042,7 +1095,8 @@ void EmulatorWindow::ExportScreenshot(const xe::ui::RawImage& image) {
   auto t = std::time(nullptr);
 
   // The format is: Year-Month-DayTHours-Minutes-Seconds based off ISO 8601
-  std::string datetime = fmt::format("{:%Y-%m-%dT%H-%M-%S}", fmt::localtime(t));
+  std::string datetime =
+      fmt::format("{:%Y-%m-%dT%H-%M-%S}", *std::localtime(&t));
 
   // Get the title id of the game because some titles contain characters that
   // cannot be used as a directory
@@ -1469,12 +1523,25 @@ void EmulatorWindow::ToggleProfilesConfigDialog() {
     emulator_->kernel_state()->BroadcastNotification(kXNotificationSystemUI, 1);
     profile_config_dialog_ =
         std::make_unique<ProfileConfigDialog>(imgui_drawer_.get(), this);
-    kernel::xam::xam_dialogs_shown_++;
+    emulator_->kernel_state()->xam_state()->xam_dialogs_shown_++;
   } else {
     disable_hotkeys_ = false;
     emulator_->kernel_state()->BroadcastNotification(kXNotificationSystemUI, 0);
-    profile_config_dialog_.reset();
-    kernel::xam::xam_dialogs_shown_--;
+    if (profile_config_dialog_->IsClosing()) {
+      profile_config_dialog_.release();
+    } else {
+      profile_config_dialog_.reset();
+    }
+    emulator_->kernel_state()->xam_state()->xam_dialogs_shown_--;
+  }
+}
+
+void EmulatorWindow::ToggleXMPConfigDialog() {
+  if (!xmp_config_dialog_) {
+    xmp_config_dialog_ = std::unique_ptr<XMPConfigDialog>(
+        new XMPConfigDialog(imgui_drawer_.get(), *this));
+  } else {
+    xmp_config_dialog_.reset();
   }
 }
 
@@ -1816,7 +1883,7 @@ EmulatorWindow::ControllerHotKey EmulatorWindow::ProcessControllerHotkey(
       selected_title_index--;
       break;
     case ButtonFunctions::ToggleLogging: {
-      logging::internal::ToggleLogLevel();
+      logging::ToggleLogLevel();
 
       notificationTitle = "Toggle Logging";
 
@@ -1903,19 +1970,26 @@ void EmulatorWindow::GamepadHotKeys() {
 
   if (input_sys) {
     while (true) {
-      auto input_lock = input_sys->lock();
+      // Collect controller states while holding the lock
+      std::array<std::pair<bool, X_INPUT_STATE>, XUserMaxUserCount>
+          controller_states;
+      {
+        auto input_lock = input_sys->lock();
+        for (uint32_t user_index = 0; user_index < XUserMaxUserCount;
+             ++user_index) {
+          X_RESULT result = input_sys->GetState(
+              user_index, X_INPUT_FLAG::X_INPUT_FLAG_GAMEPAD, &state);
+          controller_states[user_index] = {result == X_ERROR_SUCCESS, state};
+        }
+      }  // Lock is released here when input_lock goes out of scope
 
+      // Process hotkeys without holding the lock
       for (uint32_t user_index = 0; user_index < XUserMaxUserCount;
            ++user_index) {
-        X_RESULT result = input_sys->GetState(
-            user_index, X_INPUT_FLAG::X_INPUT_FLAG_GAMEPAD, &state);
-
-        // Release the lock before processing the hotkey
-        input_lock.mutex()->unlock();
-
-        // Check if the controller is connected
-        if (result == X_ERROR_SUCCESS) {
-          if (ProcessControllerHotkey(state.gamepad.buttons).rumble) {
+        if (controller_states[user_index].first) {
+          if (ProcessControllerHotkey(
+                  controller_states[user_index].second.gamepad.buttons)
+                  .rumble) {
             // Enable Vibration
             VibrateController(input_sys, user_index, true);
 
@@ -2065,7 +2139,7 @@ xe::X_STATUS EmulatorWindow::RunTitle(
 
   if (profile_config_dialog_) {
     profile_config_dialog_.reset();
-    kernel::xam::xam_dialogs_shown_--;
+    emulator_->kernel_state()->xam_state()->xam_dialogs_shown_--;
   }
 
   if (display_config_dialog_) {
@@ -2210,7 +2284,7 @@ void EmulatorWindow::ClearDialogs() {
   }
 
   imgui_drawer_.get()->ClearDialogs();
-  kernel::xam::xam_dialogs_shown_ = 0;
+  emulator_->kernel_state()->xam_state()->xam_dialogs_shown_ = 0;
 }
 
 }  // namespace app

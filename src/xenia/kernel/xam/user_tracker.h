@@ -34,7 +34,7 @@ struct TitleInfo {
   X_XDBF_AVATARAWARDS_COUNTER all_avatar_awards;
   X_XDBF_AVATARAWARDS_COUNTER male_avatar_awards;
   X_XDBF_AVATARAWARDS_COUNTER female_avatar_awards;
-  std::chrono::local_time<std::chrono::system_clock::duration> last_played;
+  std::chrono::sys_time<std::chrono::system_clock::duration> last_played;
 
   std::span<const uint8_t> icon;
 
@@ -84,6 +84,7 @@ class UserTracker {
 
   // Titles
   void AddTitleToPlayedList();
+  void RemoveTitleFromPlayedList(uint64_t xuid, uint32_t title_id);
   std::vector<TitleInfo> GetPlayedTitles(uint64_t xuid) const;
   std::optional<TitleInfo> GetUserTitleInfo(uint64_t xuid,
                                             uint32_t title_id) const;

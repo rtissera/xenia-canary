@@ -19,7 +19,7 @@
 #include "xenia/ui/windowed_app_context.h"
 #include "xenia/xbox.h"
 
-DEFINE_bool(Allow_nui_initialization, false,
+DEFINE_bool(allow_nui_initialization, false,
             "Enable NUI initialization\n"
             " Only set true when testing kinect games. Certain games may\n"
             " require avatar implementation.",
@@ -28,10 +28,6 @@ DEFINE_bool(Allow_nui_initialization, false,
 namespace xe {
 namespace kernel {
 namespace xam {
-
-extern std::atomic<int> xam_dialogs_shown_;
-extern std::atomic<int> xam_nui_dialogs_shown_;
-
 // https://web.cs.ucdavis.edu/~okreylos/ResDev/Kinect/MainPage.html
 
 struct X_NUI_DEVICE_STATUS {
@@ -73,8 +69,8 @@ dword_result_t XamNuiGetDeviceStatus_entry(
   */
 
   status_ptr.Zero();
-  status_ptr->status = cvars::Allow_nui_initialization;
-  return cvars::Allow_nui_initialization ? X_ERROR_SUCCESS : 0xC0050006;
+  status_ptr->status = cvars::allow_nui_initialization;
+  return cvars::allow_nui_initialization ? X_ERROR_SUCCESS : 0xC0050006;
 }
 DECLARE_XAM_EXPORT1(XamNuiGetDeviceStatus, kNone, kStub);
 
@@ -185,7 +181,9 @@ dword_result_t XamNuiCameraSetFlags_entry(qword_t unk1, dword_t unk2) {
 }
 DECLARE_XAM_EXPORT1(XamNuiCameraSetFlags, kNone, kStub);
 
-dword_result_t XamIsNuiUIActive_entry() { return xeXamIsNuiUIActive(); }
+dword_result_t XamIsNuiUIActive_entry() {
+  return kernel_state()->xam_state()->xam_nui_dialogs_shown_ > 0;
+}
 DECLARE_XAM_EXPORT1(XamIsNuiUIActive, kNone, kImplemented);
 
 dword_result_t XamNuiIsDeviceReady_entry() {
@@ -197,7 +195,7 @@ dword_result_t XamNuiIsDeviceReady_entry() {
      - 0x0004
      - 0x0040
   */
-  uint16_t device_state = cvars::Allow_nui_initialization ? 1 : 0;
+  uint16_t device_state = cvars::allow_nui_initialization ? 1 : 0;
   return device_state >> 1 & 1;
 }
 DECLARE_XAM_EXPORT1(XamNuiIsDeviceReady, kNone, kImplemented);
@@ -367,9 +365,9 @@ dword_result_t XamShowNuiTroubleshooterUI_entry(dword_t user_index,
               "The game has indicated there is a problem with NUI (Kinect).")
               ->Then(&fence);
         })) {
-      ++xam_dialogs_shown_;
+      kernel_state()->xam_state()->xam_dialogs_shown_++;
       fence.Wait();
-      --xam_dialogs_shown_;
+      kernel_state()->xam_state()->xam_dialogs_shown_--;
     }
   }
 

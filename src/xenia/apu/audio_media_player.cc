@@ -245,8 +245,10 @@ void AudioMediaPlayer::Play() {
 
   if (volume_ == 0.0f) {
     volume_ = cvars::xmp_default_volume / 100.0f;
-    SetVolume(volume_);
   }
+
+  // Always apply the stored volume to the newly created driver
+  driver_->SetVolume(volume_);
 
   auto result =
       ProcessAudioLoop(this, driver_.get(), formatContext, codecContext, 0);
@@ -448,7 +450,7 @@ void AudioMediaPlayer::RemovePlaylist(uint32_t handle) {
 }
 
 X_STATUS AudioMediaPlayer::SetVolume(float volume) {
-  volume_ = std::min(volume, 1.0f);
+  volume_.store(std::min(volume, 1.0f));
 
   std::unique_lock<xe_mutex> guard(driver_mutex_);
   if (!driver_) {

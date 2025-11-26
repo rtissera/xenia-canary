@@ -7,27 +7,16 @@ project("mspack")
     "xenia-base",
   })
   defines({
-    "_LIB",
     "HAVE_CONFIG_H",
-  })
-  removedefines({
-    "_UNICODE",
-    "UNICODE",
   })
   includedirs({
       "mspack",
   })
   files({
       "mspack/logging.cc",
-      "mspack/lzx.h",
       "mspack/lzxd.c",
-      "mspack/mspack.h",
-      "mspack/readbits.h",
-      "mspack/readhuff.h",
       "mspack/system.c",
-      "mspack/system.h",
   })
-
   filter("platforms:Windows-*")
     defines({
     })

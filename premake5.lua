@@ -1,7 +1,13 @@
 include("tools/build")
-require("third_party/premake-export-compile-commands/export-compile-commands")
-require("third_party/premake-androidndk/androidndk")
-require("third_party/premake-cmake/cmake")
+if _ACTION == "export-compile-commands" then
+  require("third_party/premake-export-compile-commands/export-compile-commands")
+end
+if os.istarget("android") then
+  require("third_party/premake-androidndk/androidndk")
+end
+if _ACTION == "cmake" then
+  require("third_party/premake-cmake/cmake")
+end
 
 location(build_root)
 targetdir(build_bin)
@@ -27,15 +33,17 @@ includedirs({
 })
 
 defines({
-  "_UNICODE",
-  "UNICODE",
+  "VULKAN_HPP_NO_TO_STRING",
+  "IMGUI_DISABLE_DEFAULT_FONT",
+  --"IMGUI_USE_WCHAR32",
+  "IMGUI_USE_STB_SPRINTF",
+  --"IMGUI_ENABLE_FREETYPE",
+  "USE_CPP17", -- Tabulate
 })
 
+cdialect("C17")
 cppdialect("C++20")
-exceptionhandling("On")
-rtti("On")
 symbols("On")
-characterset("Unicode")
 fatalwarnings("All")
 
 -- TODO(DrChat): Find a way to disable this on other architectures.
@@ -57,19 +65,26 @@ filter("configurations:Checked")
   editandcontinue("Off")
   staticruntime("Off")
   optimize("Off")
+  removedefines({
+    "IMGUI_USE_STB_SPRINTF",
+  })
   defines({
     "DEBUG",
   })
 
 filter({"configurations:Checked", "platforms:Windows-*"})
+filter({"configurations:Checked", "platforms:Windows"}) -- "toolset:msc"
   buildoptions({
     "/RTCsu",           -- Full Run-Time Checks.
   })
 
-filter({"configurations:Checked", "platforms:Linux-*"})
+filter({"configurations:Checked or Debug", "platforms:Linux-*"})
   defines({
     "_GLIBCXX_DEBUG",   -- libstdc++ debug mode
   })
+
+filter({"configurations:Checked or Debug", "platforms:Windows"}) -- "toolset:msc"
+  symbols("Full")
 
 filter("configurations:Debug")
   runtime("Release")
@@ -91,7 +106,9 @@ filter("configurations:Release")
     "_NO_DEBUG_HEAP=1",
   })
   optimize("Speed")
-  symbols("Off")
+  flags({
+    "NoBufferSecurityCheck"
+  })
   inlining("Auto")
   editandcontinue("Off")
   -- Not using floatingpoint("Fast") - NaN checks are used in some places
@@ -101,15 +118,15 @@ filter("configurations:Release")
   -- (such as constant propagation) emulation as predictable as possible,
   -- including handling of specials since games make assumptions about them.
 
-filter({"configurations:Release", "platforms:Windows"})
+filter({"configurations:Release", "platforms:not Windows"})
+  symbols("Off")
+
+filter({"configurations:Release", "platforms:Windows"}) -- "toolset:msc"
   linktimeoptimization("On")
-  symbols("On")
-  flags({
-    "NoBufferSecurityCheck"
-  })
   buildoptions({
     "/Gw",
     "/Ob3",
+--    "/Qpar",   -- TODO: Test this.
   })
 
 filter("platforms:Linux-*")
@@ -128,6 +145,9 @@ filter("platforms:Linux-*")
       "--target=aarch64-linux-gnu",
     })
   filter({})
+  --buildoptions({
+  --    "-mlzcnt",   -- (don't) Assume lzcnt is supported.
+  --})
   pkg_config.all("gtk+-x11-3.0")
   links({
     "stdc++fs",
@@ -140,15 +160,23 @@ filter("platforms:Linux-*")
 filter({"platforms:Linux-*", "kind:*App"})
   linkgroups("On")
 
-filter({"platforms:Linux-*", "language:C++", "toolset:gcc"})
+filter({"language:C++", "toolset:clang or gcc"}) -- "platforms:Linux"
   disablewarnings({
-    "unused-result",
-    "deprecated-volatile",
     "switch",
-    "deprecated-enum-enum-conversion",
+    "attributes",
   })
 
-filter({"platforms:Linux-*", "toolset:gcc"})
+filter({"language:C++", "toolset:gcc"}) -- "platforms:Linux"
+  disablewarnings({
+    "unused-result",
+    "volatile",
+    "template-id-cdtor",
+    "return-type",
+    "deprecated",
+  })
+
+filter("toolset:gcc") -- "platforms:Linux"
+  removefatalwarnings("All") -- HACK
   if ARCH == "ppc64" then
     buildoptions({
       "-m32",
@@ -158,38 +186,68 @@ filter({"platforms:Linux-*", "toolset:gcc"})
       "-m32",
       "-mpowerpc64"
     })
+  else
+    buildoptions({
+      "-fpermissive", -- HACK
+    })
+    linkoptions({
+      "-fpermissive", -- HACK
+    })
   end
 
-filter({"platforms:Linux-*", "language:C++", "toolset:clang"})
+filter({"language:C++", "toolset:clang"}) -- "platforms:Linux"
   disablewarnings({
     "deprecated-register",
     "deprecated-volatile",
-    "switch",
     "deprecated-enum-enum-conversion",
-    "attributes",
   })
+CLANG_BIN = os.getenv("CC") or _OPTIONS["cc"] or "clang"
+if os.istarget("linux") and string.contains(CLANG_BIN, "clang") then
+  CLANG_VER = tonumber(string.match(os.outputof(CLANG_BIN.." --version"), "version (%d%d)"))
+  if CLANG_VER >= 20 then
+    filter({"language:C++", "toolset:clang"}) -- "platforms:Linux"
+      disablewarnings({
+        "deprecated-literal-operator",   -- Needed only for tabulate
+        "nontrivial-memcall",
+      })
+  end
+  if CLANG_VER >= 21 then
+    filter({"language:C++", "toolset:clang"}) -- "platforms:Linux"
+      disablewarnings({
+        "character-conversion",          -- Needed for utfcpp third-party library
+      })
+  end
+end
+
 filter({"platforms:Linux-*", "language:C++", "toolset:clang", "files:*.cc or *.cpp"})
   buildoptions({
     "-stdlib=libstdc++",
     "-std=c++20", -- clang doesn't respect cppdialect(?)
+   })
+
+filter({"language:C", "toolset:clang or gcc"}) -- "platforms:Linux"
+  disablewarnings({
+    "implicit-function-declaration",
   })
 
-filter("platforms:Android-*")
-  system("android")
-  systemversion("24")
-  cppstl("c++")
-  staticruntime("On")
-  -- Hidden visibility is needed to prevent dynamic relocations in FFmpeg
-  -- AArch64 Neon libavcodec assembly with PIC (accesses extern lookup tables
-  -- using `adrp` and `add`, without the Global Object Table, expecting that all
-  -- FFmpeg symbols that aren't a part of the FFmpeg API are hidden by FFmpeg's
-  -- original build system) by resolving those relocations at link time instead.
-  visibility("Hidden")
-  links({
-    "android",
-    "dl",
-    "log",
-  })
+if os.istarget("android") then
+  filter("platforms:Android-*")
+    system("android")
+    systemversion("24")
+    cppstl("c++")
+    staticruntime("On")
+    -- Hidden visibility is needed to prevent dynamic relocations in FFmpeg
+    -- AArch64 Neon libavcodec assembly with PIC (accesses extern lookup tables
+    -- using `adrp` and `add`, without the Global Object Table, expecting that all
+    -- FFmpeg symbols that aren't a part of the FFmpeg API are hidden by FFmpeg's
+    -- original build system) by resolving those relocations at link time instead.
+    visibility("Hidden")
+    links({
+      "android",
+      "dl",
+      "log",
+    })
+end
 
 filter("platforms:Windows-*")
   system("windows")
@@ -197,11 +255,11 @@ filter("platforms:Windows-*")
   buildoptions({
     "/utf-8",   -- 'build correctly on systems with non-Latin codepages'.
     -- Disable warnings
-    "/wd4201",  -- Nameless struct/unions are ok.
+    "/wd4201",   -- Nameless struct/unions are ok.
   })
   flags({
-    "MultiProcessorCompile",  -- Multiprocessor compilation.
-    "NoMinimalRebuild",       -- Required for /MP above.
+    "MultiProcessorCompile",   -- Multiprocessor compilation.
+    "NoMinimalRebuild",        -- Required for /MP above.
   })
 
   defines({
@@ -209,6 +267,8 @@ filter("platforms:Windows-*")
     "_CRT_SECURE_NO_WARNINGS",
     "WIN32",
     "_WIN64=1",
+    "_AMD64=1",
+    "IMGUI_DISABLE_OBSOLETE_FUNCTIONS",
   })
   filter("architecture:x86_64")
     defines({
@@ -298,7 +358,7 @@ workspace("xenia")
   include("third_party/xxhash.lua")
   include("third_party/zarchive.lua")
   include("third_party/zstd.lua")
-  include("third_party/zlib.lua")
+  include("third_party/zlib-ng.lua")
   include("third_party/pugixml.lua")
 
   if os.istarget("windows") then

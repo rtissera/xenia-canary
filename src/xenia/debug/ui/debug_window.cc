@@ -9,9 +9,7 @@
 
 #include "xenia/debug/ui/debug_window.h"
 
-#include <algorithm>
 #include <cinttypes>
-#include <utility>
 
 #include "third_party/capstone/include/capstone/capstone.h"
 #include "third_party/capstone/include/capstone/x86.h"
@@ -387,7 +385,7 @@ void DebugWindow::DrawSourcePane() {
   ImGui::EndGroup();
 
   ImGui::BeginGroup();
-  ImGui::PushButtonRepeat(true);
+  ImGui::PushItemFlag(ImGuiItemFlags_ButtonRepeat, true);
   bool can_step = !cache_.is_running && state_.thread_info;
   if (ImGui::ButtonEx("Step PPC", ImVec2(0, 0),
                       can_step ? 0 : ImGuiItemFlags_Disabled)) {
@@ -396,7 +394,7 @@ void DebugWindow::DrawSourcePane() {
       processor_->StepGuestInstruction(state_.thread_info->thread_id);
     }
   }
-  ImGui::PopButtonRepeat();
+  ImGui::PopItemFlag();
   if (ImGui::IsItemHovered()) {
     ImGui::SetTooltip(
         "Step one PPC instruction on the current thread (hold for many).");
@@ -406,7 +404,7 @@ void DebugWindow::DrawSourcePane() {
     // Only show asm step button if we have asm visible.
     ImGui::Dummy(ImVec2(4, 0));
     ImGui::SameLine();
-    ImGui::PushButtonRepeat(true);
+    ImGui::PushItemFlag(ImGuiItemFlags_ButtonRepeat, true);
     if (ImGui::ButtonEx("Step " XE_HOST_ARCH_NAME, ImVec2(0, 0),
                         can_step ? 0 : ImGuiItemFlags_Disabled)) {
       // By enabling the button when stepping we allow repeat behavior.
@@ -414,7 +412,7 @@ void DebugWindow::DrawSourcePane() {
         processor_->StepHostInstruction(state_.thread_info->thread_id);
       }
     }
-    ImGui::PopButtonRepeat();
+    ImGui::PopItemFlag();
     if (ImGui::IsItemHovered()) {
       ImGui::SetTooltip("Step one " XE_HOST_ARCH_NAME
                         " instruction on the current thread (hold for many).");

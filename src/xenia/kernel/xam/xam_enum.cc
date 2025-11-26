@@ -114,7 +114,7 @@ dword_result_t XamGetPrivateEnumStructureFromHandle_entry(
 
   return X_STATUS_SUCCESS;
 }
-DECLARE_XAM_EXPORT1(XamGetPrivateEnumStructureFromHandle, kNone, kStub);
+DECLARE_XAM_EXPORT1(XamGetPrivateEnumStructureFromHandle, kNone, kImplemented);
 
 dword_result_t XamProfileCreateEnumerator_entry(dword_t device_id,
                                                 lpdword_t handle_ptr) {
@@ -124,7 +124,8 @@ dword_result_t XamProfileCreateEnumerator_entry(dword_t device_id,
 
   auto e = new XStaticEnumerator<X_PROFILEENUMRESULT>(kernel_state(), 1);
 
-  auto result = e->Initialize(XUserIndexAny, 0xFE, 0x23001, 0x23003, 0);
+  auto result =
+      e->Initialize(XUserIndexAny, 0xFE, 0x23001, 0x23003, 0, 0x28, nullptr);
 
   if (XFAILED(result)) {
     return result;
@@ -139,9 +140,6 @@ dword_result_t XamProfileCreateEnumerator_entry(dword_t device_id,
     profile->xuid_offline = xuid;
     profile->device_id = 1;
     memcpy(&profile->account, &account, sizeof(X_XAMACCOUNTINFO));
-
-    xe::string_util::copy_and_swap_truncating(
-        profile->account.gamertag, account.gamertag, sizeof(account.gamertag));
   }
 
   *handle_ptr = e->handle();

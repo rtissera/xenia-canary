@@ -8,11 +8,11 @@ project("xenia-base")
   links({
     "fmt",
   })
-  defines({
-  })
   local_platform_files()
-  removefiles({"console_app_main_*.cc"})
-  removefiles({"main_init_*.cc"})
+  removefiles({
+    "console_app_main_*.cc",
+    "main_init_*.cc",
+  })
   files({
     "debug_visualizers.natvis",
   })

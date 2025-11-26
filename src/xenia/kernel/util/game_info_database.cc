@@ -9,6 +9,7 @@
 
 #include "xenia/kernel/util/game_info_database.h"
 #include "xenia/base/logging.h"
+#include "xenia/kernel/xam/user_data.h"
 
 namespace xe {
 namespace kernel {
@@ -86,7 +87,7 @@ std::string GameInfoDatabase::GetLocalizedString(const uint32_t id,
 
 GameInfoDatabase::Context GameInfoDatabase::GetContext(
     const uint32_t id) const {
-  Context context = {};
+  Context context = {.id = xam::kInvalidContextId};
 
   if (!is_valid_) {
     return context;
@@ -100,13 +101,17 @@ GameInfoDatabase::Context GameInfoDatabase::GetContext(
   context.id = xdbf_context->id;
   context.default_value = xdbf_context->default_value;
   context.max_value = xdbf_context->max_value;
+  context.is_system = xam::UserData::is_system_property(xdbf_context->id);
+  context.is_presence = GetPresence().property_bag.contexts.contains(id);
+  context.is_matchmaking =
+      GetMatchmakingCollection().contexts.contains(xdbf_context->id);
   context.description = GetLocalizedString(xdbf_context->string_id);
   return context;
 }
 
 GameInfoDatabase::Property GameInfoDatabase::GetProperty(
     const uint32_t id) const {
-  Property property = {};
+  Property property = {.id = xam::kInvalidPropertyId};
 
   if (!is_valid_) {
     return property;
@@ -119,6 +124,10 @@ GameInfoDatabase::Property GameInfoDatabase::GetProperty(
 
   property.id = xdbf_property->id;
   property.data_size = xdbf_property->data_size;
+  property.is_system = xam::UserData::is_system_property(xdbf_property->id);
+  property.is_presence = GetPresence().property_bag.properties.contains(id);
+  property.is_matchmaking =
+      GetMatchmakingCollection().properties.contains(xdbf_property->id);
   property.description = GetLocalizedString(xdbf_property->string_id);
   return property;
 }
@@ -147,6 +156,120 @@ GameInfoDatabase::Achievement GameInfoDatabase::GetAchievement(
   achievement.unachieved_description =
       GetLocalizedString(xdbf_achievement->unachieved_id);
   return achievement;
+}
+
+GameInfoDatabase::PropertyBag GameInfoDatabase::GetPropertyBag(
+    const xam::PropertyBag& property_bag) const {
+  PropertyBag property_bag_native = {};
+
+  property_bag_native.contexts = {property_bag.contexts.cbegin(),
+                                  property_bag.contexts.cend()};
+  property_bag_native.properties = {property_bag.properties.cbegin(),
+                                    property_bag.properties.cend()};
+
+  return property_bag_native;
+}
+
+GameInfoDatabase::Field GameInfoDatabase::GetField(
+    const xam::ViewFieldEntry& field_entry) const {
+  Field field = {};
+
+  field.property_id = field_entry.property_id;
+  field.flags = field_entry.flags;
+  field.attribute_id = field_entry.attribute_id;
+  field.aggregation_type = field_entry.aggregation_type;
+  field.ordinal = field_entry.ordinal;
+  field.field_type = field_entry.field_type;
+  field.format_type = field_entry.format_type;
+  field.name = GetLocalizedString(field_entry.string_id);
+
+  if (field.name.empty()) {
+    field.name = xam::AttributeIdToName(field.attribute_id);
+  }
+
+  return field;
+}
+
+GameInfoDatabase::StatsView GameInfoDatabase::GetStatsView(
+    const uint32_t id) const {
+  StatsView stats_view = {};
+
+  if (!is_valid_) {
+    return stats_view;
+  }
+
+  const auto xdbf_stats_view = spa_gamedata_->GetStatsView(id);
+
+  if (!xdbf_stats_view.has_value()) {
+    return stats_view;
+  }
+
+  stats_view.view.id = xdbf_stats_view->view_entry.id;
+
+  stats_view.view.arbitrated =
+      xam::IsArbitrated(xdbf_stats_view->view_entry.flags);
+  stats_view.view.hidden = xam::IsHidden(xdbf_stats_view->view_entry.flags);
+  stats_view.view.team_view =
+      xam::IsTeamView(xdbf_stats_view->view_entry.flags);
+  stats_view.view.online_only =
+      xam::IsOnlineOnly(xdbf_stats_view->view_entry.flags);
+
+  stats_view.view.view_type =
+      xam::GetViewType(xdbf_stats_view->view_entry.flags);
+  stats_view.view.skilled = xam::IsLeaderboardIdSkill(stats_view.view.id);
+
+  stats_view.view.shared_index = xdbf_stats_view->view_entry.shared_index;
+
+  stats_view.view.name =
+      GetLocalizedString(xdbf_stats_view->view_entry.string_id);
+
+  for (const auto& column : xdbf_stats_view->shared_view.column_entries) {
+    stats_view.shared_view.column_entries.push_back(GetField(column));
+  }
+
+  for (const auto& row : xdbf_stats_view->shared_view.row_entries) {
+    stats_view.shared_view.row_entries.push_back(GetField(row));
+  }
+
+  stats_view.shared_view.properties =
+      GetPropertyBag(xdbf_stats_view->shared_view.property_bag);
+
+  return stats_view;
+}
+
+GameInfoDatabase::Presence GameInfoDatabase::GetPresence() const {
+  Presence presence;
+
+  if (!is_valid_) {
+    return presence;
+  }
+
+  const auto xdbf_presence = spa_gamedata_->GetPresence();
+
+  presence.property_bag = GetPropertyBag(xdbf_presence->property_bag);
+  presence.presence_modes = GetPresenceModes();
+
+  return presence;
+}
+
+GameInfoDatabase::PresenceMode GameInfoDatabase::GetPresenceMode(
+    const uint32_t context_value) const {
+  PresenceMode presence_mode = {};
+
+  if (!is_valid_) {
+    return presence_mode;
+  }
+
+  const auto xdbf_presence_mode = spa_gamedata_->GetPresenceMode(context_value);
+
+  if (!xdbf_presence_mode.has_value()) {
+    return presence_mode;
+  }
+
+  presence_mode.context_value = context_value;
+  presence_mode.property_bag = GetPropertyBag(xdbf_presence_mode.value());
+
+  return presence_mode;
 }
 
 std::vector<uint32_t> GameInfoDatabase::GetMatchmakingAttributes(
@@ -231,6 +354,11 @@ GameInfoDatabase::ProductInformation GameInfoDatabase::GetProductInformation()
   return info;
 }
 
+GameInfoDatabase::PropertyBag GameInfoDatabase::GetMatchmakingCollection()
+    const {
+  return GetPropertyBag(*spa_gamedata_->GetMatchCollection());
+}
+
 // Aggregators
 std::vector<GameInfoDatabase::Context> GameInfoDatabase::GetContexts() const {
   std::vector<Context> contexts;
@@ -277,6 +405,42 @@ std::vector<GameInfoDatabase::Achievement> GameInfoDatabase::GetAchievements()
   }
 
   return achievements;
+}
+
+std::vector<GameInfoDatabase::StatsView> GameInfoDatabase::GetStatsViews()
+    const {
+  std::vector<StatsView> stats_views;
+
+  if (!is_valid_) {
+    return stats_views;
+  }
+
+  const auto xdbf_stats_views = spa_gamedata_->GetStatsViews();
+
+  for (const auto& entry : *xdbf_stats_views) {
+    stats_views.push_back(GetStatsView(entry.view_entry.id));
+  }
+
+  return stats_views;
+}
+
+std::vector<GameInfoDatabase::PresenceMode> GameInfoDatabase::GetPresenceModes()
+    const {
+  std::vector<PresenceMode> presence_modes;
+
+  if (!is_valid_) {
+    return presence_modes;
+  }
+
+  const auto& xdbf_presence_modes =
+      spa_gamedata_->GetPresence()->presence_modes;
+
+  for (uint32_t context_value = 0; context_value < xdbf_presence_modes.size();
+       context_value++) {
+    presence_modes.push_back(GetPresenceMode(context_value));
+  }
+
+  return presence_modes;
 }
 
 }  // namespace util

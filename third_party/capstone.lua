@@ -6,13 +6,7 @@ project("capstone")
   defines({
     "CAPSTONE_DIET_NO",
     "CAPSTONE_USE_SYS_DYN_MEM",
-    "_LIB",
   })
---  filter({"configurations:Release", "platforms:Windows"})
---    buildoptions({
---      "/O1",
---    })
---  filter {}
 
   filter("architecture:x86_64")
     defines({
@@ -47,24 +41,25 @@ project("capstone")
   })
   files({
     "capstone/cs.c",
-    "capstone/cs_priv.h",
-    "capstone/LEB128.h",
-    "capstone/MathExtras.h",
-    "capstone/MCDisassembler.h",
-    "capstone/MCFixedLenDisassembler.h",
     "capstone/MCInst.c",
-    "capstone/MCInst.h",
     "capstone/MCInstrDesc.c",
-    "capstone/MCInstrDesc.h",
     "capstone/MCRegisterInfo.c",
-    "capstone/MCRegisterInfo.h",
     "capstone/SStream.c",
-    "capstone/SStream.h",
     "capstone/utils.c",
-    "capstone/utils.h",
     "capstone/Mapping.c",
     "capstone/Mapping.h",
   })
+  filter("architecture:x86_64")
+  files({
+    "capstone/arch/X86/*.c",
+    "capstone/arch/X86/*.h",
+    "capstone/arch/X86/*.inc",
+  })
+  filter({})
   force_compile_as_c({
     "capstone/**.c",
+  })
+  removefiles({
+    "capstone/arch/X86/X86ATTInstPrinter.c",
+    "capstone/arch/X86/*reduce.inc",
   })
